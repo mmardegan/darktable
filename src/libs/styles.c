@@ -70,20 +70,24 @@ int position()
 
 void init_key_accels(dt_lib_module_t *self)
 {
+  dt_accel_register_lib(self, NC_("accel", "create"), 0, 0);
   dt_accel_register_lib(self, NC_("accel", "remove"), 0, 0);
   dt_accel_register_lib(self, NC_("accel", "export"), 0, 0);
   dt_accel_register_lib(self, NC_("accel", "import"), 0, 0);
   dt_accel_register_lib(self, NC_("accel", "edit"), 0, 0);
+  dt_accel_register_lib(self, NC_("accel", "apply"), 0, 0);
 }
 
 void connect_key_accels(dt_lib_module_t *self)
 {
   dt_lib_styles_t *d = (dt_lib_styles_t *)self->data;
 
+  dt_accel_connect_button_lib(self, "create", d->create_button);
   dt_accel_connect_button_lib(self, "remove", d->delete_button);
   dt_accel_connect_button_lib(self, "export", d->export_button);
   dt_accel_connect_button_lib(self, "import", d->import_button);
   if(d->edit_button) dt_accel_connect_button_lib(self, "edit", d->edit_button);
+  dt_accel_connect_button_lib(self, "apply", d->apply_button);
 }
 
 typedef enum _styles_columns_t
@@ -392,12 +396,7 @@ static void export_clicked(GtkWidget *w, gpointer user_data)
 #ifdef GDK_WINDOWING_QUARTZ
   dt_osx_disallow_fullscreen(filechooser);
 #endif
-  gchar *import_path = dt_conf_get_string("ui_last/export_path");
-  if(import_path != NULL)
-  {
-    gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(filechooser), import_path);
-    g_free(import_path);
-  }
+  dt_conf_get_folder_to_file_chooser("ui_last/export_path", filechooser);
   gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(filechooser), FALSE);
 
   if(gtk_dialog_run(GTK_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
@@ -514,9 +513,7 @@ static void export_clicked(GtkWidget *w, gpointer user_data)
       }
       dt_control_log(_("style %s was successfully exported"), (char*)style->data);
     }
-    gchar *folder = gtk_file_chooser_get_current_folder(GTK_FILE_CHOOSER(filechooser));
-    dt_conf_set_string("ui_last/export_path", folder);
-    g_free(folder);
+    dt_conf_set_folder_from_file_chooser("ui_last/export_path", filechooser);
     g_free(filedir);
   }
   gtk_widget_destroy(filechooser);
@@ -536,13 +533,7 @@ static void import_clicked(GtkWidget *w, gpointer user_data)
 #ifdef GDK_WINDOWING_QUARTZ
   dt_osx_disallow_fullscreen(filechooser);
 #endif
-  gchar *import_path = dt_conf_get_string("ui_last/import_path");
-  if(import_path != NULL)
-  {
-    gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(filechooser), import_path);
-    g_free(import_path);
-  }
-
+  dt_conf_get_folder_to_file_chooser("ui_last/import_path", filechooser);
   gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(filechooser), TRUE);
 
   GtkFileFilter *filter;
@@ -703,9 +694,7 @@ static void import_clicked(GtkWidget *w, gpointer user_data)
 
     dt_lib_styles_t *d = (dt_lib_styles_t *)user_data;
     _gui_styles_update_view(d);
-    gchar *folder = gtk_file_chooser_get_current_folder(GTK_FILE_CHOOSER(filechooser));
-    dt_conf_set_string("ui_last/import_path", folder);
-    g_free(folder);
+    dt_conf_set_folder_from_file_chooser("ui_last/import_path", filechooser);
   }
   gtk_widget_destroy(filechooser);
 }
@@ -847,7 +836,7 @@ void gui_init(dt_lib_module_t *self)
                                dt_conf_get_bool("ui_last/styles_create_duplicate"));
   gtk_widget_set_tooltip_text(d->duplicate, _("creates a duplicate of the image before applying style"));
 
-  d->applymode = dt_bauhaus_combobox_new(NULL);
+  d->applymode = dt_bauhaus_combobox_new_action(DT_ACTION(self));
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(d->applymode), TRUE, FALSE, 0);
   dt_bauhaus_widget_set_label(d->applymode, NULL, N_("mode"));
   dt_bauhaus_combobox_add(d->applymode, _("append"));

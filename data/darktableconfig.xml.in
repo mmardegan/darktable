@@ -182,13 +182,6 @@
     <longdescription>if enabled, cached thumbnails will be color managed so that lighttable and filmstrip can show correct colors. otherwise the results may look wrong once the display profile gets changed.</longdescription>
   </dtconfig>
   <dtconfig prefs="cpugpu" restart="true">
-    <name>worker_threads</name>
-    <type min="1" max="64">int</type>
-    <default>2</default>
-    <shortdescription>number of background threads</shortdescription>
-    <longdescription>this controls for example how many threads are used to create thumbnails during import. the cache will grow to a maximum of twice this number of full resolution image buffers (needs a restart).</longdescription>
-  </dtconfig>
-  <dtconfig prefs="cpugpu" restart="true">
     <name>host_memory_limit</name>
     <type>int</type>
     <default>1500</default>
@@ -703,6 +696,20 @@
     <name>ui_last/import_dialog_height</name>
     <type>int</type>
     <default>600</default>
+    <shortdescription/>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
+    <name>ui_last/shortcuts_dialog_width</name>
+    <type>int</type>
+    <default>1100</default>
+    <shortdescription/>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
+    <name>ui_last/shortcuts_dialog_height</name>
+    <type>int</type>
+    <default>750</default>
     <shortdescription/>
     <longdescription/>
   </dtconfig>
@@ -1360,7 +1367,7 @@
   <dtconfig>
     <name>plugins/lighttable/collect/num_rules</name>
     <type>int</type>
-    <default>0</default>
+    <default>1</default>
     <shortdescription/>
     <longdescription/>
   </dtconfig>
@@ -1374,7 +1381,7 @@
   <dtconfig>
     <name>plugins/lighttable/collect/string0</name>
     <type>string</type>
-    <default/>
+    <default>%</default>
     <shortdescription/>
     <longdescription/>
   </dtconfig>
@@ -2826,6 +2833,13 @@
     <name>plugins/print/print/black_point_compensation</name>
     <type>bool</type>
     <default>true</default>
+    <shortdescription/>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
+    <name>plugins/print/print/grid_size</name>
+    <type min="0" max="100">float</type>
+    <default>10</default>
     <shortdescription/>
     <longdescription/>
   </dtconfig>

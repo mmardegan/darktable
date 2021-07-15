@@ -83,7 +83,7 @@ typedef struct dt_iop_colorbalancergb_params_t
   float hue_angle;             // $MIN: -180. $MAX: 180. $DEFAULT: 0.0 $DESCRIPTION: "hue shift"
 
   /* params of v2 */
-  float brilliance_global;     // $MIN: -1.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "global"
+  float brilliance_global;     // $MIN: -1.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "global brilliance"
   float brilliance_highlights; // $MIN: -1.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "highlights"
   float brilliance_midtones;   // $MIN: -1.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "midtones"
   float brilliance_shadows;    // $MIN: -1.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "shadows"
@@ -169,9 +169,9 @@ const char *description(struct dt_iop_module_t *self)
 {
   return dt_iop_set_description(self, _("affect color, brightness and contrast"),
                                       _("corrective or creative"),
-                                      _("linear, Lab, scene-referred"),
+                                      _("linear, RGB, scene-referred"),
                                       _("non-linear, RGB"),
-                                      _("non-linear, Lab, scene-referred"));
+                                      _("non-linear, RGB, scene-referred"));
 }
 
 int flags()
@@ -1614,10 +1614,12 @@ void gui_init(dt_iop_module_t *self)
   g->mask_display = FALSE;
 
   // start building top level widget
-  g->notebook = GTK_NOTEBOOK(gtk_notebook_new());
+  static dt_action_def_t notebook_def = { };
+  g->notebook = dt_ui_notebook_new(&notebook_def);
+  dt_action_define_iop(self, NULL, N_("page"), GTK_WIDGET(g->notebook), &notebook_def);
 
   // Page master
-  self->widget = dt_ui_notebook_page(g->notebook, _("master"), _("global grading"));
+  self->widget = dt_ui_notebook_page(g->notebook, N_("master"), _("global grading"));
 
   g->hue_angle = dt_bauhaus_slider_from_params(self, "hue_angle");
   dt_bauhaus_slider_set_digits(g->hue_angle, 4);
@@ -1729,7 +1731,7 @@ void gui_init(dt_iop_module_t *self)
 
 
   // Page 4-ways
-  self->widget = dt_ui_notebook_page(g->notebook, _("4 ways"), _("selective color grading"));
+  self->widget = dt_ui_notebook_page(g->notebook, N_("4 ways"), _("selective color grading"));
 
   gtk_box_pack_start(GTK_BOX(self->widget), dt_ui_section_label_new(_("global offset")), FALSE, FALSE, 0);
 
@@ -1827,15 +1829,17 @@ void gui_init(dt_iop_module_t *self)
   gtk_widget_set_tooltip_text(g->midtones_C, _("chroma of the color exponent in midtones"));
 
   // Page masks
-  self->widget = dt_ui_notebook_page(g->notebook, _("masks"), _("isolate luminances"));
+  self->widget = dt_ui_notebook_page(g->notebook, N_("masks"), _("isolate luminances"));
 
   gtk_box_pack_start(GTK_BOX(self->widget), dt_ui_section_label_new(_("luminance ranges")), FALSE, FALSE, 0);
 
   const float aspect = dt_conf_get_int("plugins/darkroom/colorbalancergb/aspect_percent") / 100.0;
   g->area = GTK_DRAWING_AREA(dtgtk_drawing_area_new_with_aspect_ratio(aspect));
+  g_object_set_data(G_OBJECT(g->area), "iop-instance", self);
+  dt_action_define_iop(self, NULL, N_("graph"), GTK_WIDGET(g->area), NULL);
   g_signal_connect(G_OBJECT(g->area), "draw", G_CALLBACK(dt_iop_tonecurve_draw), self);
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(g->area), FALSE, FALSE, 0);
-  gtk_widget_add_events(GTK_WIDGET(g->area), darktable.gui->scroll_mask);
+  gtk_widget_add_events(GTK_WIDGET(g->area), darktable.gui->scroll_mask | GDK_ENTER_NOTIFY_MASK);
   g_signal_connect(G_OBJECT(g->area), "scroll-event", G_CALLBACK(area_scroll_callback), self);
 
   g->shadows_weight = dt_bauhaus_slider_from_params(self, "shadows_weight");

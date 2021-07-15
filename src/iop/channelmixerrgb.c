@@ -174,7 +174,6 @@ typedef struct dt_iop_channelmixer_rbg_data_t
   float p, gamut;
   int apply_grey;
   int clip;
-  int do_gamut_mapping;
   dt_adaptation_t adaptation;
   dt_illuminant_t illuminant_type;
   dt_iop_channelmixer_rgb_version_t version;
@@ -352,41 +351,41 @@ void init_presets(dt_iop_module_so_t *self)
   * in legacy channel mixer that don't even say in which RGB space they are supposed to be applied.
   */
 
-  // Ilford HP5 +
+  // ILFORD HP5 +
   // https://www.ilfordphoto.com/amfile/file/download/file/1903/product/695/
   p.grey[0] = 0.25304098f;
   p.grey[1] = 0.25958747f;
   p.grey[2] = 0.48737156f;
 
-  dt_gui_presets_add_generic(_("B&W : Ilford HP5+"), self->op,
+  dt_gui_presets_add_generic(_("B&W : ILFORD HP5+"), self->op,
                              self->version(), &p, sizeof(p), 1, DEVELOP_BLEND_CS_RGB_SCENE);
 
-  // Ilford Delta 100
+  // ILFORD Delta 100
   // https://www.ilfordphoto.com/amfile/file/download/file/3/product/681/
   p.grey[0] = 0.24552374f;
   p.grey[1] = 0.25366007f;
   p.grey[2] = 0.50081619f;
 
-  dt_gui_presets_add_generic(_("B&W : Ilford Delta 100"), self->op,
+  dt_gui_presets_add_generic(_("B&W : ILFORD DELTA 100"), self->op,
                              self->version(), &p, sizeof(p), 1, DEVELOP_BLEND_CS_RGB_SCENE);
 
-  // Ilford Delta 400 and 3200 - they have the same curve
+  // ILFORD Delta 400 and 3200 - they have the same curve
   // https://www.ilfordphoto.com/amfile/file/download/file/1915/product/685/
   // https://www.ilfordphoto.com/amfile/file/download/file/1913/product/683/
   p.grey[0] = 0.24376712f;
   p.grey[1] = 0.23613559f;
   p.grey[2] = 0.52009729f;
 
-  dt_gui_presets_add_generic(_("B&W : Ilford Delta 400 - 3200"), self->op,
+  dt_gui_presets_add_generic(_("B&W : ILFORD DELTA 400 - 3200"), self->op,
                              self->version(), &p, sizeof(p), 1, DEVELOP_BLEND_CS_RGB_SCENE);
 
-  // Ilford FP 2
+  // ILFORD FP4+
   // https://www.ilfordphoto.com/amfile/file/download/file/1919/product/690/
   p.grey[0] = 0.24149085f;
   p.grey[1] = 0.22149272f;
   p.grey[2] = 0.53701643f;
 
-  dt_gui_presets_add_generic(_("B&W : Ilford FP2"), self->op,
+  dt_gui_presets_add_generic(_("B&W : ILFORD FP4+"), self->op,
                              self->version(), &p, sizeof(p), 1, DEVELOP_BLEND_CS_RGB_SCENE);
 
   // Fuji Acros 100
@@ -528,52 +527,58 @@ static inline void upscale_vector(float vector[4], const float scaling)
 static inline void gamut_mapping(const float input[4], const float compression, const int clip, float output[4])
 {
   // Get the sum XYZ
-  float sum = 0.f;
-  for(size_t c = 0; c < 3; c++) sum += input[c];
-  sum = fmaxf(sum, NORM_MIN);
+  const float sum = input[0] + input[1] + input[2];
+  const float Y = input[1];
 
-  // Convert to xyY
-  float Y = fmaxf(input[1], 0.f);
-  float xyY[4] DT_ALIGNED_PIXEL = { input[0] / sum, input[1] / sum , Y, 0.0f };
-
-  // Convert to uvY
-  float uvY[4] DT_ALIGNED_PIXEL;
-  dt_xyY_to_uvY(xyY, uvY);
-
-  // Get the chromaticity difference with white point uv
-  const float D50[2] DT_ALIGNED_PIXEL = { 0.20915914598542354f, 0.488075320769787f };
-  const float delta[2] DT_ALIGNED_PIXEL = { D50[0] - uvY[0], D50[1] - uvY[1] };
-  const float Delta = Y * (sqf(delta[0]) + sqf(delta[1]));
-
-  // Compress chromaticity (move toward white point)
-  const float correction = (compression == 0.0f) ? 0.f : powf(Delta, compression);
-  for(size_t c = 0; c < 2; c++)
+  if(sum > 0.f && Y > 0.f)
   {
-    // Ensure the correction does not bring our uyY vector the other side of D50
-    // that would switch to the opposite color, so we clip at D50
-    const float tmp = DT_FMA(correction, delta[c], uvY[c]); // correction * delta[c] + uvY[c]
-    uvY[c] = (uvY[c] > D50[c]) ? fmaxf(tmp, D50[c])
-                               : fminf(tmp, D50[c]);
+    // Convert to xyY
+    float xyY[4] DT_ALIGNED_PIXEL = { input[0] / sum, input[1] / sum , Y, 0.0f };
+
+    // Convert to uvY
+    float uvY[4] DT_ALIGNED_PIXEL;
+    dt_xyY_to_uvY(xyY, uvY);
+
+    // Get the chromaticity difference with white point uv
+    const float D50[2] DT_ALIGNED_PIXEL = { 0.20915914598542354f, 0.488075320769787f };
+    const float delta[2] DT_ALIGNED_PIXEL = { D50[0] - uvY[0], D50[1] - uvY[1] };
+    const float Delta = Y * (sqf(delta[0]) + sqf(delta[1]));
+
+    // Compress chromaticity (move toward white point)
+    const float correction = (compression == 0.0f) ? 0.f : powf(Delta, compression);
+    for(size_t c = 0; c < 2; c++)
+    {
+      // Ensure the correction does not bring our uyY vector the other side of D50
+      // that would switch to the opposite color, so we clip at D50
+      const float tmp = DT_FMA(correction, delta[c], uvY[c]); // correction * delta[c] + uvY[c]
+      uvY[c] = (uvY[c] > D50[c]) ? fmaxf(tmp, D50[c])
+                                : fminf(tmp, D50[c]);
+    }
+
+    // Convert back to xyY
+    dt_uvY_to_xyY(uvY, xyY);
+
+    // Clip upon request
+    if(clip) for(size_t c = 0; c < 2; c++) xyY[c] = fmaxf(xyY[c], 0.0f);
+
+    // Check sanity of y
+    // since we later divide by y, it can't be zero
+    xyY[1] = fmaxf(xyY[1], NORM_MIN);
+
+    // Check sanity of x and y :
+    // since Z = Y (1 - x - y) / y, if x + y >= 1, Z will be negative
+    const float scale = xyY[0] + xyY[1];
+    const int sanitize = (scale >= 1.f);
+    for(size_t c = 0; c < 2; c++) xyY[c] = (sanitize) ? xyY[c] / scale : xyY[c];
+
+    // Convert back to XYZ
+    dt_xyY_to_XYZ(xyY, output);
   }
-
-  // Convert back to xyY
-  dt_uvY_to_xyY(uvY, xyY);
-
-  // Clip upon request
-  if(clip) for(size_t c = 0; c < 2; c++) xyY[c] = fmaxf(xyY[c], 0.0f);
-
-  // Check sanity of y
-  // since we later divide by y, it can't be zero
-  xyY[1] = fmaxf(xyY[1], NORM_MIN);
-
-  // Check sanity of x and y :
-  // since Z = Y (1 - x - y) / y, if x + y >= 1, Z will be negative
-  const float scale = xyY[0] + xyY[1];
-  const int sanitize = (scale >= 1.f);
-  for(size_t c = 0; c < 2; c++) xyY[c] = (sanitize) ? xyY[c] / scale : xyY[c];
-
-  // Convert back to XYZ
-  dt_xyY_to_XYZ(xyY, output);
+  else
+  {
+    // sum of channels == 0, and/or Y == 0 so we have black
+    for(size_t c = 0; c < 3; c++) output[c] = 0.f;
+  }
 }
 
 
@@ -583,46 +588,56 @@ static inline void gamut_mapping(const float input[4], const float compression, 
 static inline void luma_chroma(const float input[4], const float saturation[4], const float lightness[4],
                                float output[4], const dt_iop_channelmixer_rgb_version_t version)
 {
-  // Compute euclidean norm and flat lightness adjustment
-  const float avg = fmaxf((input[0] + input[1] + input[2]) / 3.0f, NORM_MIN);
-  const float mix = scalar_product(input, lightness);
+  // Compute euclidean norm
   float norm = euclidean_norm(input);
+  const float avg = fmaxf((input[0] + input[1] + input[2]) / 3.0f, NORM_MIN);
 
-  // Compensate the norm to get color ratios (R, G, B) = (1, 1, 1) for grey (colorless) pixels.
-  if(version == CHANNELMIXERRGB_V_3) norm *= INVERSE_SQRT_3;
-
-  // Ratios
-  for(size_t c = 0; c < 3; c++) output[c] = input[c] / norm;
-
-  // Compute ratios and a flat colorfulness adjustment for the whole pixel
-  float coeff_ratio = 0.f;
-
-  if(version == CHANNELMIXERRGB_V_1)
+  if(norm > 0.f && avg > 0.f)
   {
+    // Compute flat lightness adjustment
+    const float mix = scalar_product(input, lightness);
+
+    // Compensate the norm to get color ratios (R, G, B) = (1, 1, 1) for grey (colorless) pixels.
+    if(version == CHANNELMIXERRGB_V_3) norm *= INVERSE_SQRT_3;
+
+    // Ratios
+    for(size_t c = 0; c < 3; c++) output[c] = input[c] / norm;
+
+    // Compute ratios and a flat colorfulness adjustment for the whole pixel
+    float coeff_ratio = 0.f;
+
+    if(version == CHANNELMIXERRGB_V_1)
+    {
+      for(size_t c = 0; c < 3; c++)
+        coeff_ratio += sqf(1.0f - output[c]) * saturation[c];
+    }
+    else
+      coeff_ratio = scalar_product(output, saturation) / 3.f;
+
+    // Adjust the RGB ratios with the pixel correction
     for(size_t c = 0; c < 3; c++)
-      coeff_ratio += sqf(1.0f - output[c]) * saturation[c];
+    {
+      // if the ratio was already invalid (negative), we accept the result to be invalid too
+      // otherwise bright saturated blues end up solid black
+      const float min_ratio = (output[c] < 0.0f) ? output[c] : 0.0f;
+      const float output_inverse = 1.0f - output[c];
+      output[c] = fmaxf(DT_FMA(output_inverse, coeff_ratio, output[c]),
+                        min_ratio); // output_inverse  * coeff_ratio + output
+    }
+
+    // The above interpolation between original pixel ratios and (1, 1, 1) might change the norm of the
+    // ratios. Compensate for that.
+    if(version == CHANNELMIXERRGB_V_3) norm /= euclidean_norm(output) * INVERSE_SQRT_3;
+
+    // Apply colorfulness adjustment channel-wise and repack with lightness to get LMS back
+    norm *= fmaxf(1.f + mix / avg, 0.f);
+    for(size_t c = 0; c < 3; c++) output[c] *= norm;
   }
   else
-    coeff_ratio = scalar_product(output, saturation) / 3.f;
-
-  // Adjust the RGB ratios with the pixel correction
-  for(size_t c = 0; c < 3; c++)
   {
-    // if the ratio was already invalid (negative), we accept the result to be invalid too
-    // otherwise bright saturated blues end up solid black
-    const float min_ratio = (output[c] < 0.0f) ? output[c] : 0.0f;
-    const float output_inverse = 1.0f - output[c];
-    output[c] = fmaxf(DT_FMA(output_inverse, coeff_ratio, output[c]),
-                      min_ratio); // output_inverse  * coeff_ratio + output
+    // we have black, 0 stays 0, no luminance = no color
+    for(size_t c = 0; c < 3; c++) output[c] = input[c];
   }
-
-  // The above interpolation between original pixel ratios and (1, 1, 1) might change the norm of the
-  // ratios. Compensate for that.
-  if(version == CHANNELMIXERRGB_V_3) norm /= euclidean_norm(output) * INVERSE_SQRT_3;
-
-  // Apply colorfulness adjustment channel-wise and repack with lightness to get LMS back
-  norm *= fmaxf(1.f + mix / avg, 0.f);
-  for(size_t c = 0; c < 3; c++) output[c] *= norm;
 }
 
 
@@ -630,13 +645,13 @@ static inline void loop_switch(const float *const restrict in, float *const rest
                                const size_t width, const size_t height, const size_t ch,
                                const float XYZ_to_RGB[3][4], const float RGB_to_XYZ[3][4], const float MIX[3][4],
                                const float illuminant[4], const float saturation[4], const float lightness[4], const float grey[4],
-                               const float p, const float gamut, const int clip, const int apply_grey, const int do_gamut_mapping,
+                               const float p, const float gamut, const int clip, const int apply_grey,
                                const dt_adaptation_t kind,
                                const dt_iop_channelmixer_rgb_version_t version)
 {
 #ifdef _OPENMP
 #pragma omp parallel for simd default(none) \
-  dt_omp_firstprivate(width, height, ch, in, out, XYZ_to_RGB, RGB_to_XYZ, MIX, illuminant, saturation, lightness, grey, p, gamut, clip, apply_grey, kind, version, do_gamut_mapping) \
+  dt_omp_firstprivate(width, height, ch, in, out, XYZ_to_RGB, RGB_to_XYZ, MIX, illuminant, saturation, lightness, grey, p, gamut, clip, apply_grey, kind, version) \
   aligned(in, out, XYZ_to_RGB, RGB_to_XYZ, MIX:64) aligned(illuminant, saturation, lightness, grey:16)\
   schedule(simd:static)
 #endif
@@ -751,10 +766,7 @@ static inline void loop_switch(const float *const restrict in, float *const rest
     /* FROM HERE WE ARE MANDATORILY IN XYZ - DATA IS IN temp_one */
 
     // Gamut mapping happens in XYZ space no matter what
-    if(do_gamut_mapping)
-      gamut_mapping(temp_one, gamut, clip, temp_two);
-    else
-      for(size_t c = 0; c < DT_PIXEL_SIMD_CHANNELS; ++c) temp_two[c] = temp_one[c];
+    gamut_mapping(temp_one, gamut, clip, temp_two);
 
     // convert to LMS, XYZ or pipeline RGB
     switch(kind)
@@ -1554,9 +1566,9 @@ void extract_color_checker(const float *const restrict in, float *const restrict
       GET_WEIGHT;
     }
     else if(g->optimization == DT_SOLVE_OPTIMIZE_AVG_DELTA_E)
-      w = sqrtf(sqrtf(g->delta_E_in[k] / 100.f));
+      w = sqrtf(sqrtf(1.f / g->delta_E_in[k]));
     else if(g->optimization == DT_SOLVE_OPTIMIZE_MAX_DELTA_E)
-      w = sqrtf(g->delta_E_in[k] / 100.f);
+      w = sqrtf(sqrtf(g->delta_E_in[k]));
 
     // fill 3 rows of the y column vector
     for(size_t c = 0; c < 3; c++) Y[k * 3 + c] = w * LMS_ref[c];
@@ -1635,11 +1647,11 @@ void extract_color_checker(const float *const restrict in, float *const restrict
   check_if_close_to_daylight(x, y, &temperature, &test_illuminant, NULL);
   gchar *string;
   if(test_illuminant == DT_ILLUMINANT_D)
-    string = "(daylight)";
+    string = _("(daylight)");
   else if(test_illuminant == DT_ILLUMINANT_BB)
-    string = "(black body)";
+    string = _("(black body)");
   else
-    string = "(invalid)";
+    string = _("(invalid)");
 
   gchar *diagnostic;
   if(post_mix_delta_E <= 1.2f)
@@ -1853,7 +1865,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece,
       loop_switch(in, out, roi_out->width, roi_out->height, ch,
                   XYZ_to_RGB, RGB_to_XYZ, data->MIX,
                   data->illuminant, data->saturation, data->lightness, data->grey,
-                  data->p, data->gamut, data->clip, data->apply_grey, data->do_gamut_mapping, DT_ADAPTATION_FULL_BRADFORD, data->version);
+                  data->p, data->gamut, data->clip, data->apply_grey, DT_ADAPTATION_FULL_BRADFORD, data->version);
       break;
     }
     case DT_ADAPTATION_LINEAR_BRADFORD:
@@ -1861,7 +1873,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece,
       loop_switch(in, out, roi_out->width, roi_out->height, ch,
                   XYZ_to_RGB, RGB_to_XYZ, data->MIX,
                   data->illuminant, data->saturation, data->lightness, data->grey,
-                  data->p, data->gamut, data->clip, data->apply_grey, data->do_gamut_mapping, DT_ADAPTATION_LINEAR_BRADFORD, data->version);
+                  data->p, data->gamut, data->clip, data->apply_grey, DT_ADAPTATION_LINEAR_BRADFORD, data->version);
       break;
     }
     case DT_ADAPTATION_CAT16:
@@ -1869,7 +1881,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece,
       loop_switch(in, out, roi_out->width, roi_out->height, ch,
                   XYZ_to_RGB, RGB_to_XYZ, data->MIX,
                   data->illuminant, data->saturation, data->lightness, data->grey,
-                  data->p, data->gamut, data->clip, data->apply_grey, data->do_gamut_mapping, DT_ADAPTATION_CAT16, data->version);
+                  data->p, data->gamut, data->clip, data->apply_grey, DT_ADAPTATION_CAT16, data->version);
       break;
     }
     case DT_ADAPTATION_XYZ:
@@ -1877,7 +1889,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece,
       loop_switch(in, out, roi_out->width, roi_out->height, ch,
                   XYZ_to_RGB, RGB_to_XYZ, data->MIX,
                   data->illuminant, data->saturation, data->lightness, data->grey,
-                  data->p, data->gamut, data->clip, data->apply_grey, data->do_gamut_mapping, DT_ADAPTATION_XYZ, data->version);
+                  data->p, data->gamut, data->clip, data->apply_grey, DT_ADAPTATION_XYZ, data->version);
       break;
     }
     case DT_ADAPTATION_RGB:
@@ -1885,7 +1897,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece,
       loop_switch(in, out, roi_out->width, roi_out->height, ch,
                   XYZ_to_RGB, RGB_to_XYZ, data->MIX,
                   data->illuminant, data->saturation, data->lightness, data->grey,
-                  data->p, data->gamut, data->clip, data->apply_grey, data->do_gamut_mapping, DT_ADAPTATION_RGB, data->version);
+                  data->p, data->gamut, data->clip, data->apply_grey, DT_ADAPTATION_RGB, data->version);
       break;
     }
     case DT_ADAPTATION_LAST:
@@ -2023,8 +2035,7 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
   dt_opencl_set_kernel_arg(devid, kernel, 12, sizeof(float), (void *)&d->gamut);
   dt_opencl_set_kernel_arg(devid, kernel, 13, sizeof(int), (void *)&d->clip);
   dt_opencl_set_kernel_arg(devid, kernel, 14, sizeof(int), (void *)&d->apply_grey);
-  dt_opencl_set_kernel_arg(devid, kernel, 15, sizeof(int), (void *)&d->do_gamut_mapping);
-  dt_opencl_set_kernel_arg(devid, kernel, 16, sizeof(int), (void *)&d->version);
+  dt_opencl_set_kernel_arg(devid, kernel, 15, sizeof(int), (void *)&d->version);
   err = dt_opencl_enqueue_kernel_2d(devid, kernel, sizes);
   if(err != CL_SUCCESS) goto error;
 
@@ -2711,7 +2722,6 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pix
   d->adaptation = p->adaptation;
   d->clip = p->clip;
   d->gamut = (p->gamut == 0.f) ? p->gamut : 1.f / p->gamut;
-  d->do_gamut_mapping = d->clip && (d->gamut != 0.f);
 
   // find x y coordinates of illuminant for CIE 1931 2° observer
   float x = p->x;
@@ -3683,10 +3693,12 @@ void gui_init(struct dt_iop_module_t *self)
                                   G_CALLBACK(_preview_pipe_finished_callback), self);
 
   // Init GTK notebook
-  g->notebook = GTK_NOTEBOOK(gtk_notebook_new());
+  static dt_action_def_t notebook_def = { };
+  g->notebook = dt_ui_notebook_new(&notebook_def);
+  dt_action_define_iop(self, NULL, N_("page"), GTK_WIDGET(g->notebook), &notebook_def);
 
   // Page CAT
-  self->widget = dt_ui_notebook_page(g->notebook, _("CAT"), _("chromatic adaptation transform"));
+  self->widget = dt_ui_notebook_page(g->notebook, N_("CAT"), _("chromatic adaptation transform"));
 
   g->adaptation = dt_bauhaus_combobox_from_params(self, N_("adaptation"));
   gtk_widget_set_tooltip_text(GTK_WIDGET(g->adaptation),
@@ -3761,28 +3773,28 @@ void gui_init(struct dt_iop_module_t *self)
 
   GtkWidget *first, *second, *third;
 #define NOTEBOOK_PAGE(var, short, label, tooltip, section, swap)              \
-  self->widget = dt_ui_notebook_page(g->notebook, _(label), _(tooltip));      \
+  self->widget = dt_ui_notebook_page(g->notebook, label, _(tooltip));         \
                                                                               \
   first = dt_bauhaus_slider_from_params(self, swap ? #var "[2]" : #var "[0]");\
   dt_bauhaus_slider_set_step(first, 0.005);                                   \
   dt_bauhaus_slider_set_digits(first, 3);                                     \
   dt_bauhaus_slider_set_hard_min(first, -2.f);                                \
   dt_bauhaus_slider_set_hard_max(first, 2.f);                                 \
-  dt_bauhaus_widget_set_label(first, section, _("input red"));                \
+  dt_bauhaus_widget_set_label(first, section, _("input R"));                \
                                                                               \
   second = dt_bauhaus_slider_from_params(self, #var "[1]");                   \
   dt_bauhaus_slider_set_step(second, 0.005);                                  \
   dt_bauhaus_slider_set_digits(second, 3);                                    \
   dt_bauhaus_slider_set_hard_min(second, -2.f);                               \
   dt_bauhaus_slider_set_hard_max(second, 2.f);                                \
-  dt_bauhaus_widget_set_label(second, section, _("input green"));             \
+  dt_bauhaus_widget_set_label(second, section, _("input G"));             \
                                                                               \
   third = dt_bauhaus_slider_from_params(self, swap ? #var "[0]" : #var "[2]");\
   dt_bauhaus_slider_set_step(third, 0.005);                                   \
   dt_bauhaus_slider_set_digits(third, 3);                                     \
   dt_bauhaus_slider_set_hard_min(third, -2.f);                                \
   dt_bauhaus_slider_set_hard_max(third, 2.f);                                 \
-  dt_bauhaus_widget_set_label(third, section, _("input blue"));               \
+  dt_bauhaus_widget_set_label(third, section, _("input B"));               \
                                                                               \
   g->scale_##var##_R = swap ? third : first;                                  \
   g->scale_##var##_G = second;                                                \
@@ -3790,13 +3802,13 @@ void gui_init(struct dt_iop_module_t *self)
                                                                               \
   g->normalize_##short = dt_bauhaus_toggle_from_params(self, "normalize_" #short);
 
-  NOTEBOOK_PAGE(red, R, N_("R"), N_("red"), N_("red"), FALSE)
-  NOTEBOOK_PAGE(green, G, N_("G"), N_("green"), N_("green"), FALSE)
-  NOTEBOOK_PAGE(blue, B, N_("B"), N_("blue"), N_("blue"), FALSE)
-  NOTEBOOK_PAGE(saturation, sat, N_("colorfulness"), N_("colorfulness"), N_("colorfulness"), FALSE)
+  NOTEBOOK_PAGE(red, R, N_("R"), N_("output R"), N_("red"), FALSE)
+  NOTEBOOK_PAGE(green, G, N_("G"), N_("output G"), N_("green"), FALSE)
+  NOTEBOOK_PAGE(blue, B, N_("B"), N_("output B"), N_("blue"), FALSE)
+  NOTEBOOK_PAGE(saturation, sat, N_("colorfulness"), N_("output colorfulness"), N_("colorfulness"), FALSE)
   g->saturation_version = dt_bauhaus_combobox_from_params(self, "version");
-  NOTEBOOK_PAGE(lightness, light, N_("brightness"), N_("brightness"), N_("brightness"), FALSE)
-  NOTEBOOK_PAGE(grey, grey, N_("gray"), N_("gray"), N_("gray"), FALSE)
+  NOTEBOOK_PAGE(lightness, light, N_("brightness"), N_("output brightness"), N_("brightness"), FALSE)
+  NOTEBOOK_PAGE(grey, grey, N_("gray"), N_("output gray"), N_("gray"), FALSE)
 
   // start building top level widget
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);

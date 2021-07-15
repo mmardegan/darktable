@@ -106,6 +106,7 @@ const dt_iop_order_entry_t legacy_order[] = {
   { {25.0f }, "profile_gamma", 0},
   { {26.0f }, "hazeremoval", 0},
   { {27.0f }, "colorin", 0},
+  { {27.5f }, "diffuse", 0},
   { {27.5f }, "channelmixerrgb", 0},
   { {27.5f }, "censorize", 0},
   { {27.5f }, "negadoctor", 0},
@@ -194,6 +195,7 @@ const dt_iop_order_entry_t v30_order[] = {
   { {26.0f }, "profile_gamma", 0},
   { {27.0f }, "equalizer", 0},
   { {28.0f }, "colorin", 0},
+  { {28.5f }, "diffuse", 0},
   { {28.5f }, "channelmixerrgb", 0},
   { {28.5f }, "censorize", 0},
   { {28.5f }, "negadoctor", 0},      // Cineon film encoding comes after scanner input color profile
@@ -661,6 +663,7 @@ GList *dt_ioppr_get_iop_order_list(int32_t imgid, gboolean sorted)
           _insert_before(iop_order_list, "rgbcurve", "colorbalancergb");
           _insert_before(iop_order_list, "ashift", "cacorrectrgb");
           _insert_before(iop_order_list, "graduatednd", "crop");
+          _insert_before(iop_order_list, "channelmixerrgb", "diffuse");
         }
       }
       else if(version == DT_IOP_ORDER_LEGACY)
@@ -687,9 +690,8 @@ GList *dt_ioppr_get_iop_order_list(int32_t imgid, gboolean sorted)
   // and new image not yet loaded or whose history has been reset.
   if(!iop_order_list)
   {
-    char *workflow = dt_conf_get_string("plugins/darkroom/workflow");
+    const char *workflow = dt_conf_get_string_const("plugins/darkroom/workflow");
     dt_iop_order_t iop_order_version = strcmp(workflow, "display-referred") == 0 ? DT_IOP_ORDER_LEGACY : DT_IOP_ORDER_V30;
-    g_free(workflow);
 
     if(iop_order_version == DT_IOP_ORDER_LEGACY)
       iop_order_list = _table_to_list(legacy_order);

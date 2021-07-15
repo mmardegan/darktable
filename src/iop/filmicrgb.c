@@ -21,6 +21,7 @@
 #include "bauhaus/bauhaus.h"
 #include "common/colorspaces_inline_conversions.h"
 #include "common/darktable.h"
+#include "common/bspline.h"
 #include "common/dwt.h"
 #include "common/image.h"
 #include "common/iop_profile.h"
@@ -866,86 +867,6 @@ inline static void inpaint_noise(const float *const in, const float *const mask,
 }
 
 
-// B spline filter
-#define FSIZE 5
-
-
-#ifdef _OPENMP
-#pragma omp declare simd aligned(buf, indices, result:64)
-#endif
-inline static void sparse_scalar_product(const float *const buf, const size_t indices[FSIZE], float result[4])
-{
-  // scalar product of 2 3×5 vectors stored as RGB planes and B-spline filter,
-  // e.g. RRRRR - GGGGG - BBBBB
-
-  const float DT_ALIGNED_ARRAY filter[FSIZE] =
-                        { 1.0f / 16.0f, 4.0f / 16.0f, 6.0f / 16.0f, 4.0f / 16.0f, 1.0f / 16.0f };
-
-  #ifdef _OPENMP
-  #pragma omp simd
-  #endif
-  for(size_t c = 0; c < 4; ++c)
-  {
-    float acc = 0.0f;
-    for(size_t k = 0; k < FSIZE; ++k)
-      acc += filter[k] * buf[indices[k] + c];
-    result[c] = fmaxf(acc, 0.f);
-  }
-}
-
-#ifdef _OPENMP
-#pragma omp declare simd aligned(in, out:64) aligned(tempbuf:16)
-#endif
-inline static void blur_2D_Bspline(const float *const restrict in, float *const restrict out,
-                                   float *const restrict tempbuf,
-                                   const size_t width, const size_t height, const int mult)
-{
-  // À-trous B-spline interpolation/blur shifted by mult
-  #ifdef _OPENMP
-  #pragma omp parallel for default(none) \
-    dt_omp_firstprivate(width, height, mult)  \
-    dt_omp_sharedconst(out, in, tempbuf) \
-    schedule(simd:static)
-  #endif
-  for(size_t row = 0; row < height; row++)
-  {
-    // get a thread-private one-row temporary buffer
-    float *const temp = tempbuf + 4 * width * dt_get_thread_num();
-    // interleave the order in which we process the rows so that we minimize cache misses
-    const size_t i = dwt_interleave_rows(row, height, mult);
-    // Convolve B-spline filter over columns: for each pixel in the current row, compute vertical blur
-    size_t DT_ALIGNED_ARRAY indices[FSIZE] = { 0 };
-    // Start by computing the array indices of the pixels of interest; the offsets from the current pixel stay
-    // unchanged over the entire row, so we can compute once and just offset the base address while iterating
-    // over the row
-    for(size_t ii = 0; ii < FSIZE; ++ii)
-    {
-      const size_t r = CLAMP(mult * (int)(ii - (FSIZE - 1) / 2) + (int)i, (int)0, (int)height - 1);
-      indices[ii] = 4 * r * width;
-    }
-    for(size_t j = 0; j < width; j++)
-    {
-      // Compute the vertical blur of the current pixel and store it in the temp buffer for the row
-      sparse_scalar_product(in + j * 4, indices, temp + j * 4);
-    }
-    // Convolve B-spline filter horizontally over current row
-    for(size_t j = 0; j < width; j++)
-    {
-      // Compute the array indices of the pixels of interest; since the offsets will change near the ends of
-      // the row, we need to recompute for each pixel
-      for(size_t jj = 0; jj < FSIZE; ++jj)
-      {
-        const size_t col = CLAMP(mult * (int)(jj - (FSIZE - 1) / 2) + (int)j, (int)0, (int)width - 1);
-        indices[jj] = 4 * col;
-      }
-      // Compute the horizontal blur of the already vertically-blurred pixel and store the result at the proper
-      //  row/column location in the output buffer
-      sparse_scalar_product(temp, indices, out + (i * width + j) * 4);
-    }
-  }
-}
-
-
 inline static void wavelets_reconstruct_RGB(const float *const restrict HF, const float *const restrict LF,
                                             const float *const restrict texture, const float *const restrict mask,
                                             float *const restrict reconstructed, const size_t width,
@@ -1109,16 +1030,16 @@ static int get_scales(const dt_iop_roi_t *roi_in, const dt_dev_pixelpipe_iop_t *
   /* How many wavelets scales do we need to compute at current zoom level ?
    * 0. To get the same preview no matter the zoom scale, the relative image coverage ratio of the filter at
    * the coarsest wavelet level should always stay constant.
-   * 1. The image coverage of each B spline filter of size `FSIZE` is `2^(level) * (FSIZE - 1) / 2 + 1` pixels
-   * 2. The coarsest level filter at full resolution should cover `1/FSIZE` of the largest image dimension.
-   * 3. The coarsest level filter at current zoom level should cover `scale/FSIZE` of the largest image dimension.
+   * 1. The image coverage of each B spline filter of size `BSPLINE_FSIZE` is `2^(level) * (BSPLINE_FSIZE - 1) / 2 + 1` pixels
+   * 2. The coarsest level filter at full resolution should cover `1/BSPLINE_FSIZE` of the largest image dimension.
+   * 3. The coarsest level filter at current zoom level should cover `scale/BSPLINE_FSIZE` of the largest image dimension.
    *
    * So we compute the level that solves 1. subject to 3. Of course, integer rounding doesn't make that 1:1
    * accurate.
    */
   const float scale = roi_in->scale / piece->iscale;
   const size_t size = MAX(piece->buf_in.height * piece->iscale, piece->buf_in.width * piece->iscale);
-  const int scales = floorf(log2f((2.0f * size * scale / ((FSIZE - 1) * FSIZE)) - 1.0f));
+  const int scales = floorf(log2f((2.0f * size * scale / ((BSPLINE_FSIZE - 1) * BSPLINE_FSIZE)) - 1.0f));
   return CLAMP(scales, 1, MAX_NUM_SCALES);
 }
 
@@ -2544,9 +2465,7 @@ void reload_defaults(dt_iop_module_t *module)
 
   module->default_enabled = FALSE;
 
-  gchar *workflow = dt_conf_get_string("plugins/darkroom/workflow");
-  const gboolean is_scene_referred = strcmp(workflow, "scene-referred") == 0;
-  g_free(workflow);
+  const gboolean is_scene_referred = dt_conf_is_equal("plugins/darkroom/workflow", "scene-referred");
 
   if(dt_image_is_matrix_correction_supported(&module->dev->image_storage) && is_scene_referred)
   {
@@ -3710,6 +3629,8 @@ void gui_init(dt_iop_module_t *self)
   // don't make the area square to safe some vertical space -- it's not interactive anyway
   const float aspect = dt_conf_get_int("plugins/darkroom/filmicrgb/aspect_percent") / 100.0;
   g->area = GTK_DRAWING_AREA(dtgtk_drawing_area_new_with_aspect_ratio(aspect));
+  g_object_set_data(G_OBJECT(g->area), "iop-instance", self);
+  dt_action_define_iop(self, NULL, N_("graph"), GTK_WIDGET(g->area), NULL);
 
   gtk_widget_set_can_focus(GTK_WIDGET(g->area), TRUE);
   gtk_widget_add_events(GTK_WIDGET(g->area), GDK_BUTTON_PRESS_MASK | GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK
@@ -3722,10 +3643,12 @@ void gui_init(dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(g->area), "scroll-event", G_CALLBACK(area_scroll_callback), self);
 
   // Init GTK notebook
-  g->notebook = GTK_NOTEBOOK(gtk_notebook_new());
+  static struct dt_action_def_t notebook_def = { };
+  g->notebook = dt_ui_notebook_new(&notebook_def);
+  dt_action_define_iop(self, NULL, N_("page"), GTK_WIDGET(g->notebook), &notebook_def);
 
   // Page SCENE
-  self->widget = dt_ui_notebook_page(g->notebook, _("scene"), NULL);
+  self->widget = dt_ui_notebook_page(g->notebook, N_("scene"), NULL);
 
   g->grey_point_source
       = dt_color_picker_new(self, DT_COLOR_PICKER_AREA, dt_bauhaus_slider_from_params(self, "grey_point_source"));
@@ -3775,7 +3698,7 @@ void gui_init(dt_iop_module_t *self)
   gtk_box_pack_start(GTK_BOX(self->widget), g->auto_button, FALSE, FALSE, 0);
 
   // Page RECONSTRUCT
-  self->widget = dt_ui_notebook_page(g->notebook, _("reconstruct"), NULL);
+  self->widget = dt_ui_notebook_page(g->notebook, N_("reconstruct"), NULL);
 
   GtkWidget *label = dt_ui_section_label_new(_("highlights clipping"));
   GtkStyleContext *context = gtk_widget_get_style_context(GTK_WIDGET(label));
@@ -3849,7 +3772,7 @@ void gui_init(dt_iop_module_t *self)
                                 "decrease if you see magenta or out-of-gamut highlights."));
 
   // Page LOOK
-  self->widget = dt_ui_notebook_page(g->notebook, _("look"), NULL);
+  self->widget = dt_ui_notebook_page(g->notebook, N_("look"), NULL);
 
   g->contrast = dt_bauhaus_slider_from_params(self, N_("contrast"));
   dt_bauhaus_slider_set_soft_range(g->contrast, 1.0, 2.0);
@@ -3889,7 +3812,7 @@ void gui_init(dt_iop_module_t *self)
                                                "increase if shadows and/or highlights are under-saturated."));
 
   // Page DISPLAY
-  self->widget = dt_ui_notebook_page(g->notebook, _("display"), NULL);
+  self->widget = dt_ui_notebook_page(g->notebook, N_("display"), NULL);
 
   // Black slider
   g->black_point_target = dt_bauhaus_slider_from_params(self, "black_point_target");
@@ -3916,7 +3839,7 @@ void gui_init(dt_iop_module_t *self)
                                                        "this should be 100%\nexcept if you want a faded look"));
 
   // Page OPTIONS
-  self->widget = dt_ui_notebook_page(g->notebook, _("options"), NULL);
+  self->widget = dt_ui_notebook_page(g->notebook, N_("options"), NULL);
 
   // Color science
   g->version = dt_bauhaus_combobox_from_params(self, "version");
